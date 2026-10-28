@@ -1,0 +1,29 @@
+# Gradle / build
+.gradle/
+build/
+out/
+bin/
+mcmodsrepo/
+
+# Minecraft run directories
+run/
+run-data/
+scratch_mc/
+
+# Generated data
+src/generated/resources/.cache/
+
+# RenderDoc captures
+*.rdc
+*.cap
+
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.eclipse/
+.settings/
+.classpath
+.project
