@@ -1,0 +1,102 @@
+#version 430 core
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct VertexIn {
+    vec4 pos;     // xyz = local pos, w = 1.0
+    vec4 normal;  // xyz = local normal, w = 0.0
+    vec2 uv;      // texture UV
+    vec2 pad0;    // std430 16-byte alignment
+    ivec4 joints; // 4 bone indices
+    vec4 weights; // 4 bone weights
+};
+
+// Exact 36-byte stride matching DefaultVertexFormat.NEW_ENTITY:
+// 0..11:  Position (3 x float = 12 bytes)
+// 12..15: Color    (RGBA8 packed uint = 4 bytes)
+// 16..23: UV0      (2 x float = 8 bytes)
+// 24..27: UV1      (Overlay packed 2 x short = 4 bytes)
+// 28..31: UV2      (Lightmap packed 2 x short = 4 bytes)
+// 32..35: Normal   (Packed snorm 3 bytes + 1 pad byte = 4 bytes)
+struct VertexOut {
+    float posX;
+    float posY;
+    float posZ;
+    uint color;
+    float u;
+    float v;
+    uint overlay;
+    uint light;
+    uint normal;
+};
+
+layout(std430, binding = 0) readonly buffer InBuffer {
+    VertexIn inVertices[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutBuffer {
+    VertexOut outVertices[];
+};
+
+layout(std140, binding = 2) uniform BoneData {
+    mat4 Bones[128];
+};
+
+uniform mat4 u_ModelViewMat;
+uniform mat3 u_NormalMat;
+uniform uint u_TotalVertices;
+uniform uint u_BaseVertex;
+uniform int  u_HasBones;
+uniform uint u_Color;
+uniform uint u_Overlay;
+uniform uint u_Light;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= u_TotalVertices) {
+        return;
+    }
+
+    VertexIn vin = inVertices[idx];
+
+    vec4 localPos;
+    vec3 localNorm;
+
+    // Check if skeletal skinning is active AND this specific vertex has bone weights
+    float totalWeight = vin.weights.x + vin.weights.y + vin.weights.z + vin.weights.w;
+    if (u_HasBones != 0 && totalWeight > 0.001) {
+        float invWeight = 1.0 / totalWeight;
+        vec4 w = vin.weights * invWeight;
+
+        mat4 skinMat =
+            w.x * Bones[vin.joints.x] +
+            w.y * Bones[vin.joints.y] +
+            w.z * Bones[vin.joints.z] +
+            w.w * Bones[vin.joints.w];
+
+        localPos = skinMat * vec4(vin.pos.xyz, 1.0);
+        localNorm = mat3(skinMat) * vin.normal.xyz;
+    } else {
+        // Rigid / unskinned part: zero matrix lookups, zero bone calculations!
+        localPos = vec4(vin.pos.xyz, 1.0);
+        localNorm = vin.normal.xyz;
+    }
+
+    // Transform into camera space using PoseStack matrices
+    vec4 camPos = u_ModelViewMat * localPos;
+    vec3 transformedNorm = u_NormalMat * localNorm;
+    float nLen = length(transformedNorm);
+    vec3 camNorm = nLen > 1e-4 ? (transformedNorm / nLen) : vec3(0.0, 1.0, 0.0);
+
+    // Write into Ring Buffer slot at u_BaseVertex + idx
+    uint outIdx = u_BaseVertex + idx;
+    outVertices[outIdx].posX = camPos.x;
+    outVertices[outIdx].posY = camPos.y;
+    outVertices[outIdx].posZ = camPos.z;
+    outVertices[outIdx].color = u_Color;
+    outVertices[outIdx].u = vin.uv.x;
+    outVertices[outIdx].v = vin.uv.y;
+    outVertices[outIdx].overlay = u_Overlay;
+    outVertices[outIdx].light = u_Light;
+    outVertices[outIdx].normal = packSnorm4x8(vec4(camNorm, 0.0));
+}
