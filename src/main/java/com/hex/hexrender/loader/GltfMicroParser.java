@@ -252,9 +252,49 @@ public final class GltfMicroParser {
         List<SkinnedPrimitive> primitives = new ArrayList<>();
         if (root.has("meshes")) {
             JsonArray meshArr = root.getAsJsonArray("meshes");
-            for (JsonElement mElem : meshArr) {
-                JsonObject mObj = mElem.getAsJsonObject();
-                if (mObj.has("primitives")) {
+
+            // Build map of meshIdx -> nodes referencing this mesh without skin
+            Map<Integer, List<Integer>> meshToStaticNodes = new HashMap<>();
+            for (int i = 0; i < nodeCount; i++) {
+                NodeData nd = nodes.get(i);
+                if (nd.mesh() >= 0 && nd.skin() < 0) {
+                    meshToStaticNodes.computeIfAbsent(nd.mesh(), k -> new ArrayList<>()).add(i);
+                }
+            }
+
+            // Compute global rest matrices for all nodes
+            Matrix4f[] nodeGlobals = new Matrix4f[nodeCount];
+            for (int step = 0; step < nodeCount; step++) {
+                int i = rig.evaluationOrder(step);
+                Matrix4f local = new Matrix4f().translationRotateScale(
+                        restTranslations[i], restRotations[i], restScales[i]
+                );
+                int parent = parentIndices[i];
+                if (parent < 0) {
+                    nodeGlobals[i] = local;
+                } else {
+                    nodeGlobals[i] = new Matrix4f(nodeGlobals[parent]).mul(local);
+                }
+            }
+
+            for (int m = 0; m < meshArr.size(); m++) {
+                JsonObject mObj = meshArr.get(m).getAsJsonObject();
+                if (!mObj.has("primitives")) continue;
+
+                List<Integer> staticNodeList = meshToStaticNodes.get(m);
+                if (staticNodeList != null && !staticNodeList.isEmpty()) {
+                    for (int nodeIdx : staticNodeList) {
+                        Matrix4f nodeMat = nodeGlobals[nodeIdx];
+                        for (JsonElement pElem : mObj.getAsJsonArray("primitives")) {
+                            JsonObject pObj = pElem.getAsJsonObject();
+                            SkinnedPrimitive prim = parsePrimitive(pObj, accessors, materials, sourceLoc);
+                            if (nodeMat != null && !isIdentity(nodeMat)) {
+                                prim = transformStaticPrimitive(prim, nodeMat);
+                            }
+                            primitives.add(prim);
+                        }
+                    }
+                } else {
                     for (JsonElement pElem : mObj.getAsJsonArray("primitives")) {
                         JsonObject pObj = pElem.getAsJsonObject();
                         primitives.add(parsePrimitive(pObj, accessors, materials, sourceLoc));
@@ -646,4 +686,46 @@ public final class GltfMicroParser {
     ) {}
 
     private record SamplerData(Accessor input, Accessor output, String interpolation) {}
+
+    private static boolean isIdentity(Matrix4f m) {
+        return Math.abs(m.m00() - 1.0f) < 1e-5f && Math.abs(m.m11() - 1.0f) < 1e-5f && Math.abs(m.m22() - 1.0f) < 1e-5f && Math.abs(m.m33() - 1.0f) < 1e-5f
+                && Math.abs(m.m30()) < 1e-5f && Math.abs(m.m31()) < 1e-5f && Math.abs(m.m32()) < 1e-5f;
+    }
+
+    private static SkinnedPrimitive transformStaticPrimitive(SkinnedPrimitive prim, Matrix4f mat) {
+        int vCount = prim.vertexCount();
+        float[] inPos = prim.positions();
+        float[] inNorm = prim.normals();
+        float[] outPos = new float[vCount * 3];
+        float[] outNorm = new float[vCount * 3];
+
+        Vector3f pos = new Vector3f();
+        Vector3f norm = new Vector3f();
+        for (int v = 0; v < vCount; v++) {
+            int b = v * 3;
+            pos.set(inPos[b], inPos[b + 1], inPos[b + 2]);
+            mat.transformPosition(pos);
+            outPos[b] = pos.x;
+            outPos[b + 1] = pos.y;
+            outPos[b + 2] = pos.z;
+
+            norm.set(inNorm[b], inNorm[b + 1], inNorm[b + 2]);
+            mat.transformDirection(norm).normalize();
+            outNorm[b] = norm.x;
+            outNorm[b + 1] = norm.y;
+            outNorm[b + 2] = norm.z;
+        }
+
+        return new SkinnedPrimitive(
+                outPos,
+                outNorm,
+                prim.uvs(),
+                prim.weights(),
+                prim.joints(),
+                prim.indices(),
+                prim.vertexCount(),
+                prim.indexCount(),
+                prim.material()
+        );
+    }
 }

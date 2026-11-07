@@ -1,0 +1,28 @@
+{
+  "jars": [
+    {
+      "identifier": {
+        "group": "",
+        "artifact": "hexrender"
+      },
+      "version": {
+        "range": "[1.0.0,2.0.0)",
+        "artifactVersion": "1.0.0"
+      },
+      "path": "META-INF/jarjar/hexrender-1.0.0.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {
+        "group": "dev.engine-room.flywheel",
+        "artifact": "flywheel-neoforge-1.21.1"
+      },
+      "version": {
+        "range": "[1.0.6-44,)",
+        "artifactVersion": "1.0.6-44"
+      },
+      "path": "META-INF/jarjar/flywheel-neoforge-1.21.1-1.0.6-44.jar",
+      "isObfuscated": false
+    }
+  ]
+}
