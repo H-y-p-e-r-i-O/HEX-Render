@@ -43,6 +43,17 @@ public interface BlockEntityModelDescriptor<T extends BlockEntity> {
     }
 
     /**
+     * Whether to enable the custom Blinn-Phong specular shader in vanilla (no-shader) mode.
+     * <p>
+     * Defaults to false for block entities because vanilla OpenGL lacks shadow mapping, which causes
+     * highlights to appear on surfaces occluded by roofs and overhangs. With Iris shaders, physical PBR
+     * is handled by the shaderpack with 100% accurate contact shadows regardless of this setting.
+     */
+    default boolean enableVanillaPbr(T blockEntity) {
+        return false;
+    }
+
+    /**
      * Bounding radius in blocks around the block position for zero-latency camera plane culling.
      */
     default double boundingRadius(T blockEntity) {

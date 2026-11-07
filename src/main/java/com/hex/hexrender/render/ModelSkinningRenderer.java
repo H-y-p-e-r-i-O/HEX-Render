@@ -69,11 +69,15 @@ public final class ModelSkinningRenderer {
     }
 
     public static RenderType resolveRenderType(@Nullable ResourceLocation texture, PrimitiveMaterial material) {
+        return resolveRenderType(texture, material, true);
+    }
+
+    public static RenderType resolveRenderType(@Nullable ResourceLocation texture, PrimitiveMaterial material, boolean allowPbr) {
         ResourceLocation tex = texture != null ? texture : ResourceLocation.withDefaultNamespace("textures/misc/white.png");
         if (material.alphaType() == PrimitiveMaterial.AlphaType.BLEND) {
             return RenderType.entityTranslucent(tex);
         }
-        if (HexIrisBridge.hasActiveShaders()) {
+        if (HexIrisBridge.hasActiveShaders() || !allowPbr) {
             return RenderType.entityCutoutNoCull(tex);
         }
         return HexRenderTypes.entityPbr(tex);

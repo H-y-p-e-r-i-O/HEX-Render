@@ -142,7 +142,8 @@ public class GltfBlockEntityRenderer<T extends BlockEntity> implements BlockEnti
                     light,
                     packedOverlay,
                     tint,
-                    descriptor.textureOverrides(blockEntity)
+                    descriptor.textureOverrides(blockEntity),
+                    descriptor.enableVanillaPbr(blockEntity)
             );
         } finally {
             poseStack.popPose();

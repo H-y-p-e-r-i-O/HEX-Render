@@ -67,13 +67,27 @@ public final class GpuSkinningDispatcher {
             int tint,
             @Nullable Map<ResourceLocation, ResourceLocation> textureOverrides
     ) {
+        renderModel(model, jointPalette, poseStack, bufferSource, light, overlay, tint, textureOverrides, true);
+    }
+
+    public static void renderModel(
+            GltfModelAsset model,
+            @Nullable Matrix4f[] jointPalette,
+            PoseStack poseStack,
+            MultiBufferSource bufferSource,
+            int light,
+            int overlay,
+            int tint,
+            @Nullable Map<ResourceLocation, ResourceLocation> textureOverrides,
+            boolean allowVanillaPbr
+    ) {
         if (!isSupported()) {
             ModelSkinningRenderer.renderModel(model, jointPalette, poseStack, bufferSource, light, overlay, tint, textureOverrides);
             return;
         }
 
         try {
-            renderGpu(model, jointPalette, poseStack, bufferSource, light, overlay, tint, textureOverrides);
+            renderGpu(model, jointPalette, poseStack, bufferSource, light, overlay, tint, textureOverrides, allowVanillaPbr);
         } catch (Throwable t) {
             if (!warnedFallback) {
                 warnedFallback = true;
@@ -91,7 +105,8 @@ public final class GpuSkinningDispatcher {
             int light,
             int overlay,
             int tint,
-            @Nullable Map<ResourceLocation, ResourceLocation> textureOverrides
+            @Nullable Map<ResourceLocation, ResourceLocation> textureOverrides,
+            boolean allowVanillaPbr
     ) {
         GpuMesh mesh = GpuModelManager.getOrCreate(model);
         if (mesh.totalVertices() == 0 || mesh.primitives().isEmpty()) {
@@ -143,7 +158,7 @@ public final class GpuSkinningDispatcher {
                 texture = textureOverrides.get(texture);
             }
 
-            RenderType renderType = ModelSkinningRenderer.resolveRenderType(texture, prim.material());
+            RenderType renderType = ModelSkinningRenderer.resolveRenderType(texture, prim.material(), allowVanillaPbr);
             if (renderType != activeRenderType) {
                 if (activeShader != null) {
                     activeShader.clear();
