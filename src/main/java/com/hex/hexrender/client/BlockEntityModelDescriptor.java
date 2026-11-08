@@ -43,6 +43,16 @@ public interface BlockEntityModelDescriptor<T extends BlockEntity> {
     }
 
     /**
+     * Whether this model can be rendered using GPU Compute Instancing and Multi-Draw batching.
+     * <p>
+     * Defaults to true if the model has no skeletal bones (rigid/static multiblock machines).
+     */
+    default boolean canInstance(T blockEntity) {
+        GltfModelAsset m = model(blockEntity);
+        return m == null || m.jointCount() == 0;
+    }
+
+    /**
      * Whether to enable the custom Blinn-Phong specular shader in vanilla (no-shader) mode.
      * <p>
      * Defaults to false for block entities because vanilla OpenGL lacks shadow mapping, which causes

@@ -2,6 +2,7 @@ package com.hex.hexrender.client;
 
 import com.hex.hexrender.direct.HexIrisBridge;
 import com.hex.hexrender.gpu.GpuSkinningDispatcher;
+import com.hex.hexrender.gpu.InstanceBatchCollector;
 import com.hex.hexrender.loader.GltfModelAsset;
 import com.hex.hexrender.motion.SkeletalAnimation;
 import com.hex.hexrender.render.ModelSkinningRenderer;
@@ -134,17 +135,51 @@ public class GltfBlockEntityRenderer<T extends BlockEntity> implements BlockEnti
 
             int tint = descriptor.tint(blockEntity);
 
-            GpuSkinningDispatcher.renderModel(
-                    model,
-                    palette,
-                    poseStack,
-                    bufferSource,
-                    light,
-                    packedOverlay,
-                    tint,
-                    descriptor.textureOverrides(blockEntity),
-                    descriptor.enableVanillaPbr(blockEntity)
-            );
+            // Pack ARGB tint to RGBA8 uint
+            int a = (tint >>> 24) & 0xFF;
+            if (a == 0) a = 255;
+            int r = (tint >>> 16) & 0xFF;
+            int g = (tint >>> 8) & 0xFF;
+            int b = tint & 0xFF;
+            int packedColor = (a << 24) | (b << 16) | (g << 8) | r;
+
+            if (isShadowPass) {
+                // In Shadow Pass: render immediately so draw calls always target Iris's active shadow map FBO
+                GpuSkinningDispatcher.renderModel(
+                        model,
+                        palette,
+                        poseStack,
+                        bufferSource,
+                        light,
+                        packedOverlay,
+                        tint,
+                        descriptor.textureOverrides(blockEntity),
+                        descriptor.enableVanillaPbr(blockEntity)
+                );
+            } else if (InstanceBatchCollector.ENABLE_INSTANCING && GpuSkinningDispatcher.isSupported() && palette == null && descriptor.canInstance(blockEntity)) {
+                InstanceBatchCollector.submit(
+                        model,
+                        poseStack.last().pose(),
+                        poseStack.last().normal(),
+                        packedColor,
+                        packedOverlay,
+                        light,
+                        descriptor.textureOverrides(blockEntity),
+                        descriptor.enableVanillaPbr(blockEntity)
+                );
+            } else {
+                GpuSkinningDispatcher.renderModel(
+                        model,
+                        palette,
+                        poseStack,
+                        bufferSource,
+                        light,
+                        packedOverlay,
+                        tint,
+                        descriptor.textureOverrides(blockEntity),
+                        descriptor.enableVanillaPbr(blockEntity)
+                );
+            }
         } finally {
             poseStack.popPose();
         }

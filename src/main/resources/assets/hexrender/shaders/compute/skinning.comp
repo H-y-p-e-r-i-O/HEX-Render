@@ -30,6 +30,16 @@ struct VertexOut {
     uint normal;
 };
 
+// 144-byte instance record matching std430 16-byte alignment
+struct InstanceData {
+    mat4 modelView;
+    mat4 normalMat;
+    uint color;
+    uint overlay;
+    uint light;
+    uint baseVertex;
+};
+
 layout(std430, binding = 0) readonly buffer InBuffer {
     VertexIn inVertices[];
 };
@@ -42,6 +52,10 @@ layout(std140, binding = 2) uniform BoneData {
     mat4 Bones[128];
 };
 
+layout(std430, binding = 3) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+};
+
 uniform mat4 u_ModelViewMat;
 uniform mat3 u_NormalMat;
 uniform uint u_TotalVertices;
@@ -51,13 +65,45 @@ uniform uint u_Color;
 uniform uint u_Overlay;
 uniform uint u_Light;
 
+uniform int  u_IsInstanced;
+uniform uint u_InstanceCount;
+
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= u_TotalVertices) {
+    uint vertIdx = gl_GlobalInvocationID.x;
+    uint instIdx = gl_GlobalInvocationID.y;
+
+    if (vertIdx >= u_TotalVertices) {
         return;
     }
 
-    VertexIn vin = inVertices[idx];
+    mat4 mv;
+    mat3 nm;
+    uint outBase;
+    uint color;
+    uint overlay;
+    uint light;
+
+    if (u_IsInstanced != 0) {
+        if (instIdx >= u_InstanceCount) {
+            return;
+        }
+        InstanceData inst = instances[instIdx];
+        mv = inst.modelView;
+        nm = mat3(inst.normalMat);
+        outBase = inst.baseVertex;
+        color = inst.color;
+        overlay = inst.overlay;
+        light = inst.light;
+    } else {
+        mv = u_ModelViewMat;
+        nm = u_NormalMat;
+        outBase = u_BaseVertex;
+        color = u_Color;
+        overlay = u_Overlay;
+        light = u_Light;
+    }
+
+    VertexIn vin = inVertices[vertIdx];
 
     vec4 localPos;
     vec3 localNorm;
@@ -82,21 +128,21 @@ void main() {
         localNorm = vin.normal.xyz;
     }
 
-    // Transform into camera space using PoseStack matrices
-    vec4 camPos = u_ModelViewMat * localPos;
-    vec3 transformedNorm = u_NormalMat * localNorm;
+    // Transform into camera space using instance or modelView matrix
+    vec4 camPos = mv * localPos;
+    vec3 transformedNorm = nm * localNorm;
     float nLen = length(transformedNorm);
     vec3 camNorm = nLen > 1e-4 ? (transformedNorm / nLen) : vec3(0.0, 1.0, 0.0);
 
-    // Write into Ring Buffer slot at u_BaseVertex + idx
-    uint outIdx = u_BaseVertex + idx;
+    // Write into Ring Buffer slot at outBase + vertIdx
+    uint outIdx = outBase + vertIdx;
     outVertices[outIdx].posX = camPos.x;
     outVertices[outIdx].posY = camPos.y;
     outVertices[outIdx].posZ = camPos.z;
-    outVertices[outIdx].color = u_Color;
+    outVertices[outIdx].color = color;
     outVertices[outIdx].u = vin.uv.x;
     outVertices[outIdx].v = vin.uv.y;
-    outVertices[outIdx].overlay = u_Overlay;
-    outVertices[outIdx].light = u_Light;
+    outVertices[outIdx].overlay = overlay;
+    outVertices[outIdx].light = light;
     outVertices[outIdx].normal = packSnorm4x8(vec4(camNorm, 0.0));
 }

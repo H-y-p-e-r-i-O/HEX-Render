@@ -17,6 +17,7 @@ public final class HexRender {
         if (dist.isClient()) {
             modBus.addListener(com.hex.hexrender.core.ModelRegistry::onRegisterReloadListeners);
             modBus.addListener(com.hex.hexrender.render.HexRenderTypes::onRegisterShaders);
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(com.hex.hexrender.gpu.InstanceBatchCollector::onRenderLevelStage);
         }
     }
 }

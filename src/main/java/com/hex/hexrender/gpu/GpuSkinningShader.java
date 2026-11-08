@@ -28,6 +28,7 @@ public final class GpuSkinningShader implements AutoCloseable {
 
     private final int programId;
     private final int uboBones;
+    private final int ssboInstances;
 
     // Uniform locations
     private final int locModelView;
@@ -38,6 +39,8 @@ public final class GpuSkinningShader implements AutoCloseable {
     private final int locColor;
     private final int locOverlay;
     private final int locLight;
+    private final int locIsInstanced;
+    private final int locInstanceCount;
 
     // Reusable buffers
     private final FloatBuffer mat4Buf = BufferUtils.createFloatBuffer(16);
@@ -45,9 +48,10 @@ public final class GpuSkinningShader implements AutoCloseable {
     private final ByteBuffer bonesBuf = BufferUtils.createByteBuffer(MAX_BONES * 64).order(ByteOrder.nativeOrder());
     private final FloatBuffer bonesFloatBuf = bonesBuf.asFloatBuffer();
 
-    private GpuSkinningShader(int programId, int uboBones) {
+    private GpuSkinningShader(int programId, int uboBones, int ssboInstances) {
         this.programId = programId;
         this.uboBones = uboBones;
+        this.ssboInstances = ssboInstances;
 
         this.locModelView = GL20.glGetUniformLocation(programId, "u_ModelViewMat");
         this.locNormal = GL20.glGetUniformLocation(programId, "u_NormalMat");
@@ -57,6 +61,8 @@ public final class GpuSkinningShader implements AutoCloseable {
         this.locColor = GL20.glGetUniformLocation(programId, "u_Color");
         this.locOverlay = GL20.glGetUniformLocation(programId, "u_Overlay");
         this.locLight = GL20.glGetUniformLocation(programId, "u_Light");
+        this.locIsInstanced = GL20.glGetUniformLocation(programId, "u_IsInstanced");
+        this.locInstanceCount = GL20.glGetUniformLocation(programId, "u_InstanceCount");
     }
 
     public static synchronized GpuSkinningShader get() {
@@ -110,8 +116,14 @@ public final class GpuSkinningShader implements AutoCloseable {
             GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, (long) MAX_BONES * 64, GL15.GL_DYNAMIC_DRAW);
             GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
 
-            HexRender.LOGGER.info("Successfully compiled and initialized HEXRender GPU Skinning Compute Shader");
-            return new GpuSkinningShader(program, ubo);
+            // Create SSBO for Instance Data (Binding index 3) - 256 instances x 144 bytes = 36KB
+            int ssboInst = GL15.glGenBuffers();
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssboInst);
+            GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, 256L * 144, GL15.GL_DYNAMIC_DRAW);
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+
+            HexRender.LOGGER.info("Successfully compiled and initialized HEXRender GPU Skinning Compute Shader with Instancing");
+            return new GpuSkinningShader(program, ubo, ssboInst);
         } catch (Exception e) {
             HexRender.LOGGER.error("Failed to initialize GpuSkinningShader", e);
             throw new RuntimeException(e);
@@ -132,6 +144,7 @@ public final class GpuSkinningShader implements AutoCloseable {
         if (vCount == 0) return;
 
         GL20.glUseProgram(programId);
+        GL20.glUniform1i(locIsInstanced, 0);
 
         // Upload ModelView Matrix
         mat4Buf.clear();
@@ -186,8 +199,68 @@ public final class GpuSkinningShader implements AutoCloseable {
         GL20.glUseProgram(0);
     }
 
+    public void dispatchInstanced(
+            GpuMesh mesh,
+            int instanceCount,
+            ByteBuffer instanceData,
+            Matrix4f[] bonePalette
+    ) {
+        int vCount = mesh.totalVertices();
+        if (vCount == 0 || instanceCount == 0) return;
+
+        GL20.glUseProgram(programId);
+
+        GL20.glUniform1i(locIsInstanced, 1);
+        GL43.glUniform1ui(locInstanceCount, instanceCount);
+        GL43.glUniform1ui(locTotalVertices, vCount);
+        GL20.glUniform1i(locHasBones, (bonePalette != null && mesh.hasBones()) ? 1 : 0);
+
+        // Upload bone matrices if animated
+        if (bonePalette != null && mesh.hasBones()) {
+            bonesFloatBuf.clear();
+            int count = Math.min(bonePalette.length, MAX_BONES);
+            for (int i = 0; i < count; i++) {
+                Matrix4f m = bonePalette[i];
+                if (m != null) {
+                    m.get(i * 16, bonesFloatBuf);
+                }
+            }
+            bonesBuf.position(0).limit(count * 64);
+
+            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, uboBones);
+            GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0, bonesBuf);
+            GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, 2, uboBones);
+            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
+        }
+
+        // Upload instance data to SSBO 3
+        instanceData.flip();
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssboInstances);
+        GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0, instanceData);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 3, ssboInstances);
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+
+        // Bind SSBO 0 (In) & SSBO 1 (Out)
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, mesh.ssboIn());
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, mesh.vboOut());
+
+        // Dispatch 2D grid: X = vertex groups, Y = instances
+        int groupsX = (vCount + 63) / 64;
+        GL43.glDispatchCompute(groupsX, instanceCount, 1);
+
+        // Synchronize so subsequent vertex fetch reads updated data
+        GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+
+        // Unbind
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 3, 0);
+        GL20.glUseProgram(0);
+    }
+
     @Override
     public void close() {
+        if (ssboInstances != 0) GL15.glDeleteBuffers(ssboInstances);
         if (uboBones != 0) GL15.glDeleteBuffers(uboBones);
         if (programId != 0) GL20.glDeleteProgram(programId);
     }
