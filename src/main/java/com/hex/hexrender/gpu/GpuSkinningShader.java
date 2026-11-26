@@ -105,10 +105,14 @@ public final class GpuSkinningShader implements AutoCloseable {
                 GL31.glUniformBlockBinding(program, blockIdx, 2);
             }
 
+            int prevUbo = GL11.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING);
             int ubo = GL15.glGenBuffers();
-            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, ubo);
-            GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, (long) MAX_BONES * 64, GL15.GL_DYNAMIC_DRAW);
-            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
+            try {
+                GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, ubo);
+                GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, (long) MAX_BONES * 64, GL15.GL_DYNAMIC_DRAW);
+            } finally {
+                GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, prevUbo);
+            }
 
             HexRender.LOGGER.info("Successfully compiled and initialized HEXRender GPU Skinning Compute Shader");
             return new GpuSkinningShader(program, ubo);
@@ -131,59 +135,67 @@ public final class GpuSkinningShader implements AutoCloseable {
         int vCount = mesh.totalVertices();
         if (vCount == 0) return;
 
-        GL20.glUseProgram(programId);
+        int prevProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        int prevUbo = GL11.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING);
+        boolean hasBones = bonePalette != null && mesh.hasBones();
 
-        // Upload ModelView Matrix
-        mat4Buf.clear();
-        modelViewMat.get(mat4Buf);
-        GL20.glUniformMatrix4fv(locModelView, false, mat4Buf);
+        try {
+            GL20.glUseProgram(programId);
 
-        // Upload Normal Matrix
-        mat3Buf.clear();
-        normalMat.get(mat3Buf);
-        GL20.glUniformMatrix3fv(locNormal, false, mat3Buf);
+            // Upload ModelView Matrix
+            mat4Buf.clear();
+            modelViewMat.get(mat4Buf);
+            GL20.glUniformMatrix4fv(locModelView, false, mat4Buf);
 
-        // Upload Scalar Uniforms
-        GL43.glUniform1ui(locTotalVertices, vCount);
-        GL43.glUniform1ui(locBaseVertex, baseVertex);
-        GL20.glUniform1i(locHasBones, (bonePalette != null && mesh.hasBones()) ? 1 : 0);
-        GL43.glUniform1ui(locColor, color);
-        GL43.glUniform1ui(locOverlay, overlay);
-        GL43.glUniform1ui(locLight, light);
+            // Upload Normal Matrix
+            mat3Buf.clear();
+            normalMat.get(mat3Buf);
+            GL20.glUniformMatrix3fv(locNormal, false, mat3Buf);
 
-        // Upload Bone Matrices if animated
-        if (bonePalette != null && mesh.hasBones()) {
-            bonesFloatBuf.clear();
-            int count = Math.min(bonePalette.length, MAX_BONES);
-            for (int i = 0; i < count; i++) {
-                Matrix4f m = bonePalette[i];
-                if (m != null) {
-                    m.get(i * 16, bonesFloatBuf);
+            // Upload Scalar Uniforms
+            GL43.glUniform1ui(locTotalVertices, vCount);
+            GL43.glUniform1ui(locBaseVertex, baseVertex);
+            GL20.glUniform1i(locHasBones, hasBones ? 1 : 0);
+            GL43.glUniform1ui(locColor, color);
+            GL43.glUniform1ui(locOverlay, overlay);
+            GL43.glUniform1ui(locLight, light);
+
+            // Upload Bone Matrices if animated
+            if (hasBones) {
+                bonesFloatBuf.clear();
+                int count = Math.min(bonePalette.length, MAX_BONES);
+                for (int i = 0; i < count; i++) {
+                    Matrix4f m = bonePalette[i];
+                    if (m != null) {
+                        m.get(i * 16, bonesFloatBuf);
+                    }
                 }
+                bonesBuf.position(0).limit(count * 64);
+
+                GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, uboBones);
+                GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0, bonesBuf);
+                GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, 2, uboBones);
             }
-            bonesBuf.position(0).limit(count * 64);
 
-            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, uboBones);
-            GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0, bonesBuf);
-            GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, 2, uboBones);
-            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
+            // Bind SSBO 0 (In) & SSBO 1 (Out)
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, mesh.ssboIn());
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, mesh.vboOut());
+
+            // Dispatch compute threads
+            int groups = (vCount + 63) / 64;
+            GL43.glDispatchCompute(groups, 1, 1);
+
+            // Synchronize so subsequent vertex fetch reads updated data
+            GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+        } finally {
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
+            if (hasBones) {
+                GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, 2, 0);
+            }
+            GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, prevUbo);
+            GL20.glUseProgram(prevProgram);
         }
-
-        // Bind SSBO 0 (In) & SSBO 1 (Out)
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, mesh.ssboIn());
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, mesh.vboOut());
-
-        // Dispatch compute threads
-        int groups = (vCount + 63) / 64;
-        GL43.glDispatchCompute(groups, 1, 1);
-
-        // Synchronize so subsequent vertex fetch reads updated data
-        GL43.glMemoryBarrier(GL43.GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-
-        // Unbind
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 0, 0);
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, 1, 0);
-        GL20.glUseProgram(0);
     }
 
     @Override

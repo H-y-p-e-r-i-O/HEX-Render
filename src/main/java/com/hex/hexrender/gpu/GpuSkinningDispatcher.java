@@ -5,6 +5,7 @@ import com.hex.hexrender.loader.GltfModelAsset;
 import com.hex.hexrender.render.ModelSkinningRenderer;
 import com.mojang.blaze3d.platform.Window;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.Minecraft;
@@ -147,51 +148,53 @@ public final class GpuSkinningDispatcher {
 
         // 2. Render primitives directly from Ring-Buffer VBO
         int prevVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
-        GL30.glBindVertexArray(mesh.vao());
-
         RenderType activeRenderType = null;
         ShaderInstance activeShader = null;
 
-        for (GpuMesh.GpuPrimitive prim : mesh.primitives()) {
-            ResourceLocation texture = prim.material().texture();
-            if (textureOverrides != null && textureOverrides.containsKey(texture)) {
-                texture = textureOverrides.get(texture);
+        try {
+            GL30.glBindVertexArray(mesh.vao());
+
+            for (GpuMesh.GpuPrimitive prim : mesh.primitives()) {
+                ResourceLocation texture = prim.material().texture();
+                if (textureOverrides != null && textureOverrides.containsKey(texture)) {
+                    texture = textureOverrides.get(texture);
+                }
+
+                RenderType renderType = ModelSkinningRenderer.resolveRenderType(texture, prim.material(), allowVanillaPbr);
+                if (renderType != activeRenderType) {
+                    if (activeShader != null) {
+                        activeShader.clear();
+                    }
+                    if (activeRenderType != null) {
+                        activeRenderType.clearRenderState();
+                    }
+                    activeRenderType = renderType;
+                    activeRenderType.setupRenderState();
+                    activeShader = RenderSystem.getShader();
+                    if (activeShader != null) {
+                        activeShader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, renderModelView, renderProj, window);
+                        activeShader.apply();
+                    }
+                }
+
+                GL32.glDrawElementsBaseVertex(
+                        GL11.GL_TRIANGLES,
+                        prim.indexCount(),
+                        GL11.GL_UNSIGNED_INT,
+                        (long) prim.indexByteOffset(),
+                        baseVertex
+                );
             }
-
-            RenderType renderType = ModelSkinningRenderer.resolveRenderType(texture, prim.material(), allowVanillaPbr);
-            if (renderType != activeRenderType) {
-                if (activeShader != null) {
-                    activeShader.clear();
-                }
-                if (activeRenderType != null) {
-                    activeRenderType.clearRenderState();
-                }
-                activeRenderType = renderType;
-                activeRenderType.setupRenderState();
-                activeShader = RenderSystem.getShader();
-                if (activeShader != null) {
-                    activeShader.setDefaultUniforms(VertexFormat.Mode.TRIANGLES, renderModelView, renderProj, window);
-                    activeShader.apply();
-                }
+        } finally {
+            if (activeShader != null) {
+                activeShader.clear();
             }
-
-            GL32.glDrawElementsBaseVertex(
-                    GL11.GL_TRIANGLES,
-                    prim.indexCount(),
-                    GL11.GL_UNSIGNED_INT,
-                    (long) prim.indexByteOffset(),
-                    baseVertex
-            );
+            if (activeRenderType != null) {
+                activeRenderType.clearRenderState();
+            }
+            GL30.glBindVertexArray(prevVao);
+            BufferUploader.invalidate();
         }
-
-        if (activeShader != null) {
-            activeShader.clear();
-        }
-        if (activeRenderType != null) {
-            activeRenderType.clearRenderState();
-        }
-
-        GL30.glBindVertexArray(prevVao);
 
         // Signal that the draw calls reading this slot are in-flight
         mesh.markSlotDrawn(slot);

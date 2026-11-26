@@ -164,58 +164,67 @@ public final class GpuMesh implements AutoCloseable {
         inBuf.flip();
         eboBuf.flip();
 
-        // 2. Upload SSBO In (Static model definition in VRAM)
-        int ssbo = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssbo);
-        GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, inBuf, GL15.GL_STATIC_DRAW);
-        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        int prevVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        int prevArrayBuf = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
+        int prevSsbo = GL11.glGetInteger(GL43.GL_SHADER_STORAGE_BUFFER_BINDING);
 
-        // 3. Upload EBO (Static index buffer in VRAM)
-        int eboId = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, eboId);
-        GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, eboBuf, GL15.GL_STATIC_DRAW);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        int ssbo = 0;
+        int eboId = 0;
+        int vbo = 0;
+        int vaoId = 0;
 
-        // 4. Allocate Dynamic Ring-Buffer VBO Out (256 slots in VRAM)
-        int vbo = GL15.glGenBuffers();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
-        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, (long) totalVerts * VERTEX_OUT_STRIDE * RING_SLOTS, GL15.GL_DYNAMIC_DRAW);
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        try {
+            // 2. Upload SSBO In (Static model definition in VRAM)
+            ssbo = GL15.glGenBuffers();
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, ssbo);
+            GL15.glBufferData(GL43.GL_SHADER_STORAGE_BUFFER, inBuf, GL15.GL_STATIC_DRAW);
 
-        // 5. Configure VAO matching DefaultVertexFormat.NEW_ENTITY (36-byte stride) with ALL arrays enabled
-        int vaoId = GL30.glGenVertexArrays();
-        GL30.glBindVertexArray(vaoId);
+            // 3. Allocate Dynamic Ring-Buffer VBO Out (256 slots in VRAM)
+            vbo = GL15.glGenBuffers();
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, (long) totalVerts * VERTEX_OUT_STRIDE * RING_SLOTS, GL15.GL_DYNAMIC_DRAW);
 
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, eboId);
+            // 4. Bind new VAO BEFORE touching GL_ELEMENT_ARRAY_BUFFER (VAO owns EBO binding;
+            // mutating EBO while Minecraft's VAO or VAO 0 is active detaches EBO or triggers GL_INVALID_OPERATION)
+            vaoId = GL30.glGenVertexArrays();
+            GL30.glBindVertexArray(vaoId);
 
-        // Attr 0: Position (vec3, 12 bytes)
-        GL20.glEnableVertexAttribArray(0);
-        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, VERTEX_OUT_STRIDE, 0);
+            // 5. Upload EBO directly inside our new VAO
+            eboId = GL15.glGenBuffers();
+            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, eboId);
+            GL15.glBufferData(GL15.GL_ELEMENT_ARRAY_BUFFER, eboBuf, GL15.GL_STATIC_DRAW);
 
-        // Attr 1: Color (RGBA8, 4 bytes normalized)
-        GL20.glEnableVertexAttribArray(1);
-        GL20.glVertexAttribPointer(1, 4, GL11.GL_UNSIGNED_BYTE, true, VERTEX_OUT_STRIDE, 12);
+            // 6. Configure VAO matching DefaultVertexFormat.NEW_ENTITY (36-byte stride) with ALL arrays enabled
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
 
-        // Attr 2: UV0 (vec2, 8 bytes)
-        GL20.glEnableVertexAttribArray(2);
-        GL20.glVertexAttribPointer(2, 2, GL11.GL_FLOAT, false, VERTEX_OUT_STRIDE, 16);
+            // Attr 0: Position (vec3, 12 bytes)
+            GL20.glEnableVertexAttribArray(0);
+            GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, VERTEX_OUT_STRIDE, 0);
 
-        // Attr 3: UV1 Overlay (ivec2, 2 shorts = 4 bytes)
-        GL30.glEnableVertexAttribArray(3);
-        GL30.glVertexAttribIPointer(3, 2, GL11.GL_SHORT, VERTEX_OUT_STRIDE, 24);
+            // Attr 1: Color (RGBA8, 4 bytes normalized)
+            GL20.glEnableVertexAttribArray(1);
+            GL20.glVertexAttribPointer(1, 4, GL11.GL_UNSIGNED_BYTE, true, VERTEX_OUT_STRIDE, 12);
 
-        // Attr 4: UV2 Light (ivec2, 2 shorts = 4 bytes)
-        GL30.glEnableVertexAttribArray(4);
-        GL30.glVertexAttribIPointer(4, 2, GL11.GL_SHORT, VERTEX_OUT_STRIDE, 28);
+            // Attr 2: UV0 (vec2, 8 bytes)
+            GL20.glEnableVertexAttribArray(2);
+            GL20.glVertexAttribPointer(2, 2, GL11.GL_FLOAT, false, VERTEX_OUT_STRIDE, 16);
 
-        // Attr 5: Normal (vec3, 3 signed bytes normalized = 4 bytes with pad)
-        GL20.glEnableVertexAttribArray(5);
-        GL20.glVertexAttribPointer(5, 3, GL11.GL_BYTE, true, VERTEX_OUT_STRIDE, 32);
+            // Attr 3: UV1 Overlay (ivec2, 2 shorts = 4 bytes)
+            GL30.glEnableVertexAttribArray(3);
+            GL30.glVertexAttribIPointer(3, 2, GL11.GL_SHORT, VERTEX_OUT_STRIDE, 24);
 
-        GL30.glBindVertexArray(0);
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+            // Attr 4: UV2 Light (ivec2, 2 shorts = 4 bytes)
+            GL30.glEnableVertexAttribArray(4);
+            GL30.glVertexAttribIPointer(4, 2, GL11.GL_SHORT, VERTEX_OUT_STRIDE, 28);
+
+            // Attr 5: Normal (vec3, 3 signed bytes normalized = 4 bytes with pad)
+            GL20.glEnableVertexAttribArray(5);
+            GL20.glVertexAttribPointer(5, 3, GL11.GL_BYTE, true, VERTEX_OUT_STRIDE, 32);
+        } finally {
+            GL30.glBindVertexArray(prevVao);
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, prevArrayBuf);
+            GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, prevSsbo);
+        }
 
         return new GpuMesh(ssbo, eboId, vbo, vaoId, totalVerts, anyBones, gpuPrimitives);
     }
